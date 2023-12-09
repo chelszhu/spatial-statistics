@@ -1,0 +1,274 @@
+---
+title: "MUSA500 - HW5 K-Means Clustering"
+author: "Chenxi Zhu, Teresa Chang, and Tiffany Luo "
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 80
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1 Introduction
+
+This assignment aims to utilize k-means clustering to analyze and interpret a
+dataset of 1720 block groups from Philadelphia. The dataset encompasses five key
+variables: median house value `MEDHVAL`, median household income `MEDHHINC`, the
+percentage of individuals with at least a bachelor's degree `PCTBACHMOR`, the
+percentage of single/detached housing units `PCTSINGLES`, and the percentage of
+vacant housing units `PCTVACANT`. By applying k-means clustering, which is a
+method for identifying and grouping similar data points in multi-dimensional
+space (see Methods for more detail), we can uncover patterns and relationships
+within the data. This analysis could reveal the various homeowner categories
+within the Philadelphia block groups, the number of distinct classes present,
+and their defining characteristics. Additionally, by incorporating spatial data,
+it could uncover whether these classes are geographically clustered, which would
+enable a deeper understanding of the city's socio-economic landscape. Such
+insights could be instrumental in shaping city policies
+
+## 2 Methods
+
+### 2.1 K-means algorithm
+
+K-means clustering is a widely used method of unsupervised learning, primarily
+used for grouping data into clusters. The aim is to partition a set of
+observations into a specified number k of clusters, where each observation
+belongs to the cluster with the nearest mean. This method is particularly
+effective for identifying groups or patterns in large, multi-dimensional
+datasets. The following steps detail how the algorithm works:
+
+1.  **Initialization**: K-means starts by randomly selecting k initial
+    centroids, where k is the predetermined number of clusters.
+
+    -   In r, we could use the `Nbclust` package which provides up to 30 indexes
+        for determining the optimal number of clusters in a dataset. Some
+        indexes include the D-index which calculates the second differences of
+        the within-cluster variances for different numbers of clusters, and the
+        Hubert Index which compares the pairwise distances of data points to the
+        clusters they are assigned to (A higher Hubert Index value indicates a
+        better clustering structure, where data points within the same cluster
+        are closer to each other, and those in different clusters are farther
+        apart)..
+
+    -   We could visualize the indexes using the scree plot, a line graph
+        showing the number of clusters against a criterion, typically
+        within-cluster sum of squares, helps visualize where the decrease in
+        this criterion becomes less steep. This point, often referred to as the
+        "elbow", can be a good choice for the number of clusters.
+
+2.  **Assignment**: Each data point is assigned to the nearest centroid, based
+    on the distance between the data point and the centroids.
+
+3.  **Update**: Centroids are recalculated as the mean of all data points
+    assigned to that cluster.
+
+4.  **Iteration**: Steps 2 and 3 are repeated until the centroids no longer
+    change significantly, indicating that the clusters are as homogenous as
+    possible within themselves and heterogeneous from each other.
+
+### 2.2 Limitations of K-means algorithm
+
+K-means clustering, while popular, has limitations. It requires pre-specifying
+the number of clusters (K), which can be nontrivial without prior knowledge of
+the data structure. It's best suited for numeric data and may not perform well
+with binary variables. K-means may also falter when dealing with clusters of
+varying sizes, densities, or non-spherical shapes. It's sensitive to noise and
+outliers, which can skew results. Additionally, k-means is prone to finding
+local optima of the sum of squared errors (SSE) rather than the global optimum,
+which can lead to suboptimal clustering solutions.
+
+### 2.3 Other algorithm
+
+Alternative methods like hierarchical clustering doesn't have some of the
+limitations of k-means and doesn't need to input the number of cluster but it
+doesn't work so well with larger data sets. DBSCAN is another algorithm that
+might be useful that can find arbitrarily shaped clusters and can handle
+clusters of varying sizes. DBSCAN is particularly good at identifying outliers
+as noise, which can be advantageous if the dataset contains many outliers that
+might otherwise skew the results of k-means. It's also worth considering that
+DBSCAN requires careful selection of two parameters: `eps`, which defines the
+maximum distance between two points for one to be considered as in the
+neighborhood of the other, and `minPts`, the minimum number of points to form a
+dense region. These parameters are critical to the performance of DBSCAN and
+must be chosen appropriately for the data at hand. We are sticking with k-means
+clustering due to its simlicity in this report.
+
+## 3 Results
+
+```{r load_packages, warning = FALSE, include=FALSE}
+options(scipen=10000000)
+
+library(tidyverse)
+library(kableExtra)
+library(gridExtra)
+library(caret)
+library(knitr) 
+library(pscl)
+library(plotROC)
+library(pROC)
+library(lubridate)
+library(scales)
+library(stargazer)
+library(cowplot)
+library(ggpubr)
+library(sf)
+library(corrr)
+library(car)  
+library(MASS)
+library(NbClust)
+library(dplyr)
+```
+
+### 3.1 Choosing the number of clusters k
+
+In the scree plot, the drops in within groups sum of squares in the first few
+number of clusters are pretty substantial and the drop becomes steady around 5
+clusters. The result from the `NbClust` command where 26 criteria are used to
+determine the best number of clusters shows that 2 is the best number of
+clusters, followed by 15, 3, and 4.
+
+Dividing the city into just two clusters might be too coarse, potentially
+oversimplifying the spatial dynamics. Conversely, 15 clusters might result in an
+overly fragmented view of the city, which could be too detailed for certain
+analyses or applications. Therefore, choosing 4 clusters appears to be a
+compromise that balances statistical insight with practical applicability.
+
+```{r warning=FALSE, message=FALSE}
+set.seed(2)
+data <- read.csv("RegressionData.csv")
+
+vars <- c('MEDHVAL',	'PCTBACHMOR',	'MEDHHINC',	'PCTVACANT',	'PCTSINGLES')
+data[vars] <- scale(data[vars])
+
+wss <- (nrow(data[vars])-1)*sum(apply(data[vars],2,var))
+for (i in 2:20) wss[i] <- sum(kmeans(data[vars], 
+                                     centers=i)$withinss)
+plot(1:20, wss, type="b", xlab="Number of Clusters",
+     ylab="Within groups sum of squares")
+```
+
+```{r warning=FALSE, message=FALSE}
+set.seed(2)
+nc <- NbClust(data[vars], min.nc=2, max.nc=15, method="kmeans", index="all")
+table(nc$Best.n[1,])
+par(mfrow=c(1,1)) 
+barplot(table(nc$Best.n[1,]),
+        xlab="Numer of Clusters", ylab="Number of Criteria",
+        main="Number of Clusters Chosen by 26 Criteria")
+```
+
+### 3.2 K-means clustering and aggregation
+
+We perform a k-means clustering analysis and calculate the mean values of these
+variables for each cluster. Analyzing the clustering results reveals distinct
+socio-economic profiles for each cluster. Each cluster represents a distinct
+combination of variables like median house value, household income, educational
+attainment, vacancy rates, and the percentage of single/detached houses. These
+combinations align with recognizable patterns in urban and suburban environments
+and can be categorized as:
+
+1.  **High-Value Urban Area**: This cluster distinguishes itself with very high
+    median house values and incomes. It's likely characterized by upscale
+    residential areas, possibly with a mix of luxury apartments and high-end
+    single-family homes.
+
+2.  **Balanced Urban Mix**: These are more economically accessible areas with
+    average house values and incomes, representing typical, mixed-use
+    neighborhoods with diverse demographics.
+
+3.  **Middle-Class, Education-Oriented Area**: With moderately high house values
+    and high educational attainment, these neighborhoods might attract families
+    and professionals interested in a balance of affordability and educational
+    opportunities.
+
+4.  **Economically Stressed Neighborhoods**: Marked by low house values,
+    incomes, and high vacancy rates, these areas are likely facing economic
+    hardships.
+
+```{r}
+set.seed(1)
+num_cluster = 4
+fit.km <- kmeans(data[vars], num_cluster, nstart=25)
+#fit.km$size
+
+#round(fit.km$centers, 2)
+#fit.km$cluster
+
+tbl <- cbind(round(aggregate(data[vars], by=list(cluster=fit.km$cluster), mean),1),fit.km$size)
+
+tbl %>%
+  kbl() %>%
+    kable_styling() %>%
+    kable_classic(html_font = "Cambria", position = "left", full_width = F)
+```
+
+### 3.3 Spatial distribution
+
+The color-coded clusters across the geographic space suggests there is a level
+of spatial clustering. The fact that we can visually identify areas
+predominantly composed of one color (cluster) indicates that observations within
+the same K-means cluster category tend to be located near each other. This is a
+form of spatial autocorrelation where similar values (in this case, the cluster
+category) are geographically close. Even though we can't use Moran's I due to
+the categorical nature of the data, the visual pattern indicates spatial
+autocorrelation.
+
+We would rename High-Value Urban Area (1) to High-Value Green Suburbs as the map
+shows the distribution clustered around Wissahickon, embodying the qualities of
+prosperous suburban life. The other clusters seem accurately named based on
+their locations. Economically Stressed Neighborhoods (4), are situated primarily
+in the northern, western, and southwestern parts of Philadelphia, corresponding
+with historically economically challenged areas. Cluster 3's Middle-Class,
+Education-Oriented Areas are found around cluster 1 as well as in University
+City, Center City, and Society Hill, where the presence of educational
+institutions correlates with the middle-class status of these areas. Cluster 2's
+Balanced Urban Mix covers the rest of Philly with diverse demographics. Cluster
+2 also covers some emerging neighborhoods such as Fishtown and East Passyunk,
+which are currently undergoing gentrification and increasingly attracting young
+professionals.
+
+```{r warning=FALSE, message=FALSE, results='hide', include=FALSE}
+shp <- st_read('RegressionData.shp/RegressionData.shp') 
+```
+
+```{r warning=FALSE, message=FALSE}
+data$cluster <- fit.km$cluster
+
+cluster_shp <- left_join(shp, data, by = "POLY_ID") %>% st_as_sf()
+
+ggplot(cluster_shp) +
+  geom_sf(aes(fill = factor(cluster)), color = NA) +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2")) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(), # Remove background grid
+      axis.text = element_blank(), axis.ticks = element_blank(), # Remove axis text and ticks
+      axis.title = element_blank()) + # Remove axis titles
+  labs(title = "Cluster Map", fill = "cluster")
+```
+
+## 4 Discussion
+
+The k-means analysis of Philadelphia block groups, with its focus on housing
+values, income levels, educational attainment, and vacancy rates, has unveiled a
+spatial dimension to the city's socio-economic stratification. The clusters not
+only reflect economic status and housing characteristics but also show a
+geographic cohesion that could inform urban planning and policy decisions. Some
+key findings in the analysis include: Affluent areas border Wissahickon Park,
+economically stressed neighborhoods span the north, west, and southwest, and
+middle-class, education-centric regions are centered around University City.
+Notably, within various mixed-used neighborhoods with diverse socioeconomic
+characteristics, some neighborhoods like Fishtown and East Passyunk are
+transitioning into vibrant hubs for young professionals, indicating a city in
+socioeconomic flux. This spatial understanding is pivotal for addressing
+regional disparities and tailoring interventions to the unique needs of each
+neighborhood, with the potential to foster more equitable and sustainable urban
+development.
